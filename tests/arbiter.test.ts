@@ -299,3 +299,15 @@ describe("the arbiter's guards facts (row 281)", () => {
     expect(checkFacts(mixed)).toBe('guards: FAILED · 3 marked · 1 proven · 1 waived · 1 owed (lint 0, test 1) · owed b.ts\\u{202e}')
   })
 })
+
+describe('the arbiter reads the tolerated check (row 284)', () => {
+  it('the arbiter reads the tolerated check as counts and rule ids, never a file (row 284)', () => {
+    const facts = checkFacts({ name: 'tolerated', ok: false, detail: 'eslint no-x: 1 new beside 1 tolerated — a.ts:9', tolerated: [
+      { tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1, grown: { k3: { file: 'a.ts', copies: 1 } }, lines: { k3: 9 } },
+      { tool: 'biome', rule: 'lint/a/b', state: 'not-measured', why: 'biome-unwired' },
+      { tool: 'eslint', rule: 'no-y', state: 'measured', spots: 4, allowed: 4, grown: {} },
+    ] })
+    expect(facts).toBe('tolerated: FAILED · eslint no-x 1 new beside 1 tolerated · biome lint/a/b not measured (biome-unwired) · eslint no-y all 4 tolerated')
+    expect(facts).not.toContain('a.ts')
+  })
+})

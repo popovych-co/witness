@@ -18,7 +18,7 @@ import { anchorKey } from '../verdict.js'
 import { findById, loadCanon, type Canon, type CanonDoc } from '../scan.js'
 import { lazyStamp } from '../stamp.js'
 import { kv, rows, visible } from '../toon.js'
-import { bookedWhere, looseHeld, offWhere, openItems, ruleShown } from '../ledger.js'
+import { bookedWhere, looseHeld, offWhere, openItems, ruleShown, toleratedHeld } from '../ledger.js'
 import { parseBaseKey } from '../base-lint.js'
 import { isId } from '../dsl.js'
 import { decidedBy } from '../autonomy.js'
@@ -116,6 +116,10 @@ export function bookedRows(root: string): Array<Record<string, unknown>> {
     if (i.kind === 'booked-loosened') {
       const holds = i.part !== undefined ? `lint part ${visible(i.part)}, ${looseHeld(i.subject)}` : `${i.tool ?? '?'} ${ruleShown(i.rule ?? '')} hidden, ${looseHeld(i.subject)}`
       return { ...head, check: visible(i.check), holds, since }
+    }
+    // Row 284: a tolerated set holds its rule's spots.
+    if (i.kind === 'tolerated-set') {
+      return { ...head, check: visible(i.check), holds: `${bookedWhere(i)}, ${toleratedHeld(i.subject.spots)}`, since }
     }
     const base = parseBaseKey(i.part_key)?.commit
     const holds = 'whole' in i.subject

@@ -33,7 +33,7 @@ import { prepareStamp, writeStamp } from '../stamp.js'
 import { handOverIfDue } from '../slice.js'
 import { parseBaseKey } from '../base-lint.js'
 import { CHECKS, checkTier, checkWaiver } from '../checks.js'
-import { bookLines, bookedWhere, bookingsOf, ledgerTaken, looseHeld, offWhere, ruleShown, type Booking, type LedgerOpen } from '../ledger.js'
+import { bookLines, bookedWhere, bookingsOf, ledgerTaken, looseHeld, offWhere, ruleShown, toleratedHeld, type Booking, type LedgerOpen } from '../ledger.js'
 import { boundReader } from '../lint-parts.js'
 import { LEDGER_STREAM } from '../streams.js'
 import type { Violation } from '../refusal.js'
@@ -1004,6 +1004,11 @@ function bookQuestion(gate: string, target: string, check: string, anchor: GateR
       }
       const files = [...new Set(Object.values(b.subject.hidden).map((h) => visible(h.file)))]
       return `  ${b.tool} ${ruleShown(b.rule ?? '')}: ${looseHeld(b.subject)} in ${files.slice(0, 3).join(', ')}${files.length > 3 ? ` and ${files.length - 3} more` : ''}`
+    }
+    // Row 284: a tolerated growth — its rule, its spots and their files.
+    if (b.kind === 'tolerated-set') {
+      const files = [...new Set(Object.values(b.subject.spots).map((x) => visible(x.file)))]
+      return `  ${b.tool} ${ruleShown(b.rule)}: ${toleratedHeld(b.subject.spots)} in ${files.slice(0, 3).join(', ')}${files.length > 3 ? ` and ${files.length - 3} more` : ''}`
     }
     const rules = 'diagnostics' in b.subject ? (parts.find((p) => p.part === b.part)?.rules ?? []) : []
     return `  ${visible(b.part)} — ${bookWhat(b)}${rules.length > 0 ? `: ${rules.map(visible).join(', ')}` : ''}`

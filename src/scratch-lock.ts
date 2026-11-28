@@ -82,9 +82,11 @@ function readText(p: string): string | undefined {
 }
 
 // Row 279: the pid rule, as the turn's. `until` is never read.
-// Neither `since` (slice 1 review M1): with no lease it bounds nothing, and a clock stepped back
-// would read a live holder's `since` as the future and hand its scratch to a second user.
-const live = (l: ScratchHolder): boolean => isAlive(l.pid)
+// `since` only as a week's bound either way (push security review): a forged lock, or one whose pid
+// the OS handed on, wedges the scratch a week at most, while no host sleep and no clock step a person
+// meets reaches it (slice 1 review M1 dropped the minute's bound that one did).
+const withinWeek = (since: number): boolean => Math.abs(Date.now() - since) <= MAX_LEASE_MS
+const live = (l: ScratchHolder): boolean => withinWeek(l.since) && isAlive(l.pid)
 
 const olderThanGrace = (p: string, now: number): boolean => {
   try { return now - lstatSync(p).mtimeMs >= UNREADABLE_GRACE_MS } catch { return true }
@@ -159,11 +161,11 @@ function markerFiles(root: string): Array<{ p: string; pid: number; text: string
   })
 }
 
-// Row 279. The live waiters: a marker whose pid is alive.
+// Row 279. The live waiters: a marker whose pid is alive, written within the week's bound.
 export function scratchWaiters(root: string): ScratchWaiter[] {
   return markerFiles(root).flatMap(({ pid, text }) => {
     const w = text === undefined ? undefined : parseWaiter(text, pid)
-    return w !== undefined && isAlive(w.pid) ? [w] : []
+    return w !== undefined && withinWeek(w.since) && isAlive(w.pid) ? [w] : []
   })
 }
 
@@ -174,7 +176,7 @@ export function sweepScratchWaiters(root: string): number {
   let n = 0
   for (const { p, pid, text } of markerFiles(root)) {
     const w = text === undefined ? undefined : parseWaiter(text, pid)
-    const gone = w !== undefined ? !isAlive(w.pid) : olderThanGrace(p, now)
+    const gone = w !== undefined ? !(withinWeek(w.since) && isAlive(w.pid)) : olderThanGrace(p, now)
     if (!gone) continue
     try { if (takeStale(p, (t) => t === text) === 'taken') n++ } catch { /* left to the next sweep */ }
   }

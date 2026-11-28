@@ -89,6 +89,17 @@ describe('the scratch is held while its holder lives (row 279)', () => {
     expect(scratchWaiters(repo.root).map((w) => w.pid)).toEqual([waiter])
   })
 
+  it('a holder whose since lies more than 7 days from now is stale, so a forged or reused lock wedges the scratch a week at most (push security review)', async () => {
+    const repo = tmpRepo()
+    const pid = await sleeper(); const waiter = await sleeper()
+    for (const since of [Date.now() - 8 * 86_400_000, Date.now() + 8 * 86_400_000]) {
+      writeLock(repo.root, { pid, since })
+      expect(scratchHolder(repo.root)).toBeUndefined()
+    }
+    writeWaiter(repo.root, { pid: waiter, since: Date.now() - 8 * 86_400_000 })
+    expect(scratchWaiters(repo.root)).toEqual([])
+  })
+
   it('a lock an older witness wrote, or one with no until, reads by its pid; a job name must be a string', async () => {
     const repo = tmpRepo()
     const pid = await sleeper()

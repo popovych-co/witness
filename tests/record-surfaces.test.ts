@@ -113,7 +113,7 @@ describe('the record on status and in drive (row 254)', () => {
   it('an escape with no amended spec reads so in its charged cell', () => {
     const r: TrackRecord = {
       escapes: { measured: true, fixes: [{ effort: 'x-fix', cause: 'escape', uncharged: 'no-amended-spec' }], escapes: 1, decisions: 0, plans: 0, byVersion: [] },
-      live: { measured: false, specs: 0, failing: [], couldNotVerify: [], unconfirmed: [] }, checks: { measured: false }, repairs: { measured: false },
+      live: { measured: false, specs: 0, failing: [], couldNotVerify: [], unconfirmed: [] }, checks: { measured: false }, tolerated: { measured: false }, repairs: { measured: false },
     }
     expect(recordTables(r)).toContain('  x-fix,escape,none (no amended spec),—,—')
   })

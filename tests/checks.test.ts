@@ -28,14 +28,30 @@ describe('the check registry (row 264)', () => {
     await expect(runChecks([{ name: 'nope', run: () => ({ name: 'nope', ok: true }) }])).rejects.toThrow(/nope/)
     await expect(runChecks([{ name: 'lint', run: () => ({ name: 'tests', ok: true }) }])).rejects.toThrow(/lint/)
   })
-  it("lint's waiver is the human's, guards' and switch-offs' the judge's, and no other check has one (rows 270, 273, 281)", () => {
-    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['lint', 'human'], ['guards', 'judge'], ['switch-offs', 'judge']])
+  it("lint's and tolerated's waiver is the human's, guards' and switch-offs' the judge's, and no other check has one (rows 270, 273, 281, 284)", () => {
+    expect(CHECKS.filter((c) => c.waiver !== undefined).map((c) => [c.name, c.waiver])).toEqual([['tolerated', 'human'], ['lint', 'human'], ['guards', 'judge'], ['switch-offs', 'judge']])
     expect(checkWaiver('lint')).toBe('human')
     expect(checkWaiver('markers')).toBeUndefined()
   })
   it('a booking made since a round moves the signature: booked is a state term (row 270)', () => {
     const lint = (state: PartState): GateCheck[] => [{ name: 'lint', ok: state === 'booked', parts: [{ part: 'ui', state, key: 'k1' }] }]
     expect(checksSignature(lint('booked'))).not.toBe(checksSignature(lint('not-judged')))
+  })
+  it("tolerated is withholding, the human's to waive, and runs after markers, before lint (row 284)", () => {
+    expect(checkTier('tolerated')).toBe('withholding')
+    expect(checkWaiver('tolerated')).toBe('human')
+    expect(CHECKS.map((c) => c.name).slice(0, 3)).toEqual(['markers', 'tolerated', 'lint'])
+  })
+  it("a tolerated check's growth joins the signature, and a covering booking moves it (row 284)", () => {
+    const tol = (grown: Record<string, { file: string; copies: number }>, extra: Record<string, unknown> = {}): GateCheck[] =>
+      [{ name: 'tolerated', ok: Object.keys(grown).length === 0, tolerated: [{ tool: 'eslint', rule: 'no-x', state: 'measured', spots: 2, allowed: 1, grown, ...extra }] }]
+    const k3 = { k3: { file: 'a.ts', copies: 1 } }
+    expect(checksSignature(tol(k3))).not.toBe(checksSignature(tol({})))
+    expect(checksSignature(tol(k3))).toBe(checksSignature(tol({ k3: { file: 'a.ts', copies: 1 } })))
+    expect(checksSignature(tol(k3))).not.toBe(checksSignature(tol({ k3: { file: 'a.ts', copies: 2 } })))
+    expect(checksSignature(tol({}, { over: 3 }))).not.toBe(checksSignature(tol({})))
+    const unmeasured = (why: string): GateCheck[] => [{ name: 'tolerated', ok: false, tolerated: [{ tool: 'eslint', rule: 'no-x', state: 'not-measured', why }] }]
+    expect(checksSignature(unmeasured('reader-unset'))).not.toBe(checksSignature(unmeasured('reader-unread')))
   })
   it('lists each check once, the withholding tier first', () => {
     const names = CHECKS.map((c) => c.name)

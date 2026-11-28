@@ -108,9 +108,11 @@ export function jsonStyle(root: string, existing: string | undefined): JsonStyle
   return { indent, lineWidth, tabWidth: count ?? 2 }
 }
 
+// Slice 2 review (row 285): witness's own tolerated file sets no style, so extending it alone keeps Biome's default.
+const WITNESS_EXTENDS = new Set(['./biome.witness.json', 'biome.witness.json'])
 function hasExtends(doc: Record<string, unknown>): boolean {
   const ext = doc.extends
-  return typeof ext === 'string' ? ext !== '' : Array.isArray(ext) && ext.length > 0
+  return typeof ext === 'string' ? ext !== '' && !WITNESS_EXTENDS.has(ext) : Array.isArray(ext) && ext.some((e) => !WITNESS_EXTENDS.has(e as string))
 }
 
 // Row 250 (#95). Whether Biome would check witness's payload, read from its config without running it,

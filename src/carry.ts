@@ -607,7 +607,8 @@ const CONFLICT = /^CONFLICT \(/m
 //     listing its staged files, since a staged-only version survives only there;
 //   - anything else: refused, or a held lock — the carry ref kept either way.
 // git's words are read only as the carry's runner gives them: in the C locale.
-export function reapply(wt: string, planId: string, carry: string): Reapplied {
+// Row 285: `git` the config arguments the apply runs under (ship's merge driver for the tolerated lists).
+export function reapply(wt: string, planId: string, carry: string, git: readonly string[] = []): Reapplied {
   const writes = carryPaths(wt, carry)
   if (writes === undefined) return { kind: 'refused', out: `git could not read which files the carry ${carry} writes` }
   const inTheWay = untrackedInTheWay(wt, writes)
@@ -617,13 +618,13 @@ export function reapply(wt: string, planId: string, carry: string): Reapplied {
       + 'moved aside, the work goes back; nothing was written over them' }
   }
   if (unmergedPaths(wt).length > 0) return { kind: 'refused', out: 'the index already holds unmerged entries, so the plan\'s work was not put back into it' }
-  const applied = carryGit(wt, 'stash', 'apply', '--index', carry)
+  const applied = carryGit(wt, ...git, 'stash', 'apply', '--index', carry)
   if (applied.code === 0) return dropCarry(wt, planId, carry)
   const out = `${applied.stdout}${applied.stderr}`
   const clashed = settleApply(wt, planId, carry, out)
   if (clashed !== undefined) return clashed
   if (/conflicts in index/.test(out)) {
-    const plain = carryGit(wt, 'stash', 'apply', carry)
+    const plain = carryGit(wt, ...git, 'stash', 'apply', carry)
     if (plain.code === 0) {
       const index = carryGit(wt, 'diff-tree', '-r', '--name-only', '-z', '--no-renames', `${carry}^1`, `${carry}^2`)
       const files = index.code === 0 ? index.stdout.split('\0').filter((f) => f !== '') : []

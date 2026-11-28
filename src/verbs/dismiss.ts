@@ -139,8 +139,8 @@ async function dismissLedger(ctx: Ctx, which: string, cause: string | undefined,
   const item = target!
   // Row 274: a switch-off item is named by its token in its file; it stops waiving at the next gate run.
   // Row 276: a booked loss is named by its spec's tests, and stops waiving from the next gate run too.
-  // Row 278: a loosened item is named by its hidden rule or its part.
-  const question = item.kind === 'booked-switch-off' || item.kind === 'booked-dropped' || item.kind === 'booked-loosened'
+  // Row 278: a loosened item is named by its hidden rule or its part. Row 284: a tolerated set by its tool and rule.
+  const question = item.kind === 'booked-switch-off' || item.kind === 'booked-dropped' || item.kind === 'booked-loosened' || item.kind === 'tolerated-set'
     ? `dismiss ${visible(item.id)} — ${visible(item.check)} · ${bookedWhere(item)} · ${visible(item.plan)}: ${cause}\ndismiss? the booking stops waiving from the next gate run [y/N]`
     : `dismiss ${visible(item.id)} — ${visible(item.check)} · ${visible(item.part)} · ${visible(item.plan)} · ${
       'whole' in item.subject ? 'the whole part' : `${Object.values(item.subject.diagnostics).reduce((a, n) => a + n, 0)} diagnostics`}: ${cause}\ndismiss? the booking stops waiving from the next lint run [y/N]`

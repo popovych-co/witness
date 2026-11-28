@@ -28,6 +28,7 @@ import { restorable } from '../definitions.js'
 import { definitionsCheck, type LintEffect } from '../lint-effect.js'
 import { runChecks, type CheckStep } from '../checks.js'
 import { markersCheck } from '../markers.js'
+import { prepareTolerated, toleratedCheck } from '../tolerated.js'
 import { serializeDoc } from '../fm.js'
 import { lintCheck } from '../lint-lane.js'
 import { guardsCheck } from '../guard.js'
@@ -73,6 +74,9 @@ registerGate({
     refreshSparse(root, wt)
     const dropped = dropRetired(wt, base, planId)
     if (dropped.length > 0) ctx.out(kv('payload-retired', `${dropped.join(' · ')} — dropped from ${planId}: its base no longer carries them`))
+    // Row 285 (C51). The tolerated lists written for the rebased tree and committed with the trailer, as above.
+    const tolerated = await prepareTolerated(root, wt, ctx, cfg, planId, base, `ship(${planId}): tolerated lists rewritten for its base`)
+    if (tolerated !== undefined && tolerated.wrote.length > 0) ctx.out(kv('tolerated', `${tolerated.wrote.join(' · ')} rewritten for this tree`))
     const files = planChangeSet(wt, base)
 
     // Row 251. Each check is timed with the inputs only it reads; shared inputs stay outside.
@@ -99,6 +103,8 @@ registerGate({
     const steps: CheckStep[] = [
       // Row 265. A conflict opener on a line the plan adds withholds the review.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
+      // Row 284: wherever a tolerated set applies, its rules' new spots — the human's to book.
+      ...(tolerated === undefined ? [] : [{ name: 'tolerated', run: () => toleratedCheck(root, wt, cfg, planId, base, 'ship', tolerated) }]),
       { name: 'implement-gate', run: () => {
         const entries = readStream(root, planId)
         const lastImplement = lastGateRun(entries, 'implement')

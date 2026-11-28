@@ -60,3 +60,38 @@ describe('readers (row 262)', () => {
     expect(value(parseReport('biome', sarif, 1))).toEqual([{ rule: '?', file: '' }])
   })
 })
+
+describe('readers read through the lists (row 283)', () => {
+  it('an ESLint suppressed message of kind file is a tolerated spot, a directive one is not (row 283)', () => {
+    const out = JSON.stringify([{ filePath: '/r/a.ts', messages: [], suppressedMessages: [
+      { ruleId: 'no-x', severity: 2, line: 3, suppressions: [{ kind: 'file', justification: '' }] },
+      { ruleId: 'no-y', severity: 2, line: 4, suppressions: [{ kind: 'directive', justification: '' }] },
+      { ruleId: 'no-z', severity: 1, line: 5, suppressions: [{ kind: 'file', justification: '' }] },
+    ] }])
+    expect(value(parseReport('eslint', out, 0))).toEqual([{ rule: 'no-x', file: '/r/a.ts', line: 3, tolerated: true }])
+  })
+
+  it('ESLint exit 2 with a whole report (unused suppressions) reads the report, never reader-unread (row 283, probe Q5)', () => {
+    expect(value(parseReport('eslint', '[]', 2))).toEqual([])
+    expect(rule(parseReport('eslint', 'not json', 2))).toBe('reader-unread')
+    expect(rule(parseReport('biome', JSON.stringify({ runs: [{ results: [] }] }), 1))).toBe('reader-unread')
+  })
+
+  it('a suppressedMessages that is not an array reads reader-unread (row 283)', () => {
+    expect(rule(parseReport('eslint', JSON.stringify([{ filePath: '/r/a.ts', messages: [], suppressedMessages: 'x' }]), 0))).toBe('reader-unread')
+  })
+
+  it('a red ESLint exit with only tolerated spots reports no error: unread (row 283)', () => {
+    const out = JSON.stringify([{ filePath: '/r/a.ts', messages: [], suppressedMessages: [
+      { ruleId: 'no-x', severity: 2, line: 3, suppressions: [{ kind: 'file', justification: '' }] },
+    ] }])
+    expect(rule(parseReport('eslint', out, 1))).toBe('reader-unread')
+  })
+
+  it('a Biome note is a candidate, never an error, and a red exit with only notes is unread (row 283)', () => {
+    const note = { ruleId: 'lint/suspicious/noConsole', level: 'note', locations: [{ physicalLocation: { artifactLocation: { uri: 'file:///r/a.ts' }, region: { startLine: 2 } } }] }
+    const sarif = JSON.stringify({ runs: [{ results: [note] }] })
+    expect(value(parseReport('biome', sarif, 0))).toEqual([{ rule: 'lint/suspicious/noConsole', file: 'file:///r/a.ts', line: 2, note: true }])
+    expect(rule(parseReport('biome', sarif, 1))).toBe('reader-unread')
+  })
+})

@@ -1,10 +1,11 @@
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { diagnosticKey, keyCounts, newDiagnostics, normalizeSnippet, placeFile, readPart, toDiagnostics, type Diagnostic } from '../src/diagnostics.js'
+import { diagnosticKey, keyCounts, lineKeys, newDiagnostics, normalizeSnippet, placeFile, readPart, toDiagnostics, type Diagnostic } from '../src/diagnostics.js'
+import { biomePairs } from '../src/tolerated-lists.js'
 import type { Result } from '../src/refusal.js'
 import { captureCommand } from '../src/runner.js'
-import { fakeCtx, fixtureEnv, tmpRepo } from './helpers.js'
+import { fakeCtx, fixtureEnv, git, tmpRepo } from './helpers.js'
 
 const value = <T>(r: Result<T>): T => { if (!r.ok) throw new Error(JSON.stringify(r.violations)); return r.value }
 const d = (file: string, snippet: string, rule = 'r'): Diagnostic => ({ tool: 'biome', rule, file, line: 1, snippet })
@@ -67,5 +68,55 @@ describe('a part on a tree (row 262)', () => {
     expect(r.diagnostics).toHaveLength(200)
     expect(r.reported).toBe(200)
     expect(r.diagnostics[0]).toEqual({ tool: 'biome', rule: 'lint/r0', file: 'src/a.ts', line: 1, snippet: 'BAD' })
+  })
+})
+
+describe('readers read through the lists (row 283)', () => {
+  const witnessFile = JSON.stringify({ overrides: [{ includes: ['src/a.ts'], linter: { rules: { suspicious: { noConsole: 'info' } } } }] })
+
+  it('a Biome note reads as a tolerated spot only at a pair the witness file lists (row 283)', () => {
+    const repo = tmpRepo()
+    const at = (file: string, rule: string) => ({ rule, file: join(repo.root, file), line: 1, text: 'console.log(1)', note: true as const })
+    const out = toDiagnostics('biome', [at('src/a.ts', 'lint/suspicious/noConsole'), at('src/b.ts', 'lint/suspicious/noConsole'), at('src/a.ts', 'lint/style/useConst')], repo.root, biomePairs(witnessFile))
+    expect(out).toEqual([{ tool: 'biome', rule: 'lint/suspicious/noConsole', file: 'src/a.ts', line: 1, snippet: 'console.log(1)', tolerated: true }])
+    expect(toDiagnostics('biome', [at('src/a.ts', 'lint/suspicious/noConsole')], repo.root)).toEqual([])
+  })
+
+  it('readPart returns tolerated spots beside errors, and errors alone in diagnostics (row 283)', () => {
+    const repo = tmpRepo()
+    repo.write('src/a.ts', 'A\nB\n')
+    const report = [{ filePath: join(repo.root, 'src/a.ts'), source: 'A\nB\n',
+      messages: [{ ruleId: 'no-a', severity: 2, line: 1 }],
+      suppressedMessages: [{ ruleId: 'no-b', severity: 2, line: 2, suppressions: [{ kind: 'file', justification: '' }] }] }]
+    repo.write('report.json', JSON.stringify(report))
+    const r = value(readPart(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), 'eslint', 'cat report.json; exit 1'))
+    expect(r.diagnostics.map((d) => d.rule)).toEqual(['no-a'])
+    expect(r.tolerated.map((d) => d.rule)).toEqual(['no-b'])
+    expect(r.tolerated[0]).toEqual({ tool: 'eslint', rule: 'no-b', file: 'src/a.ts', line: 2, snippet: 'B', tolerated: true })
+    expect(r.reported).toBe(1)
+  })
+
+  it("readPart reads Biome's notes at the run folder's biome.witness.json pairs (row 283)", () => {
+    const repo = tmpRepo()
+    repo.write('src/a.ts', 'console.log(1)\n')
+    repo.write('biome.witness.json', witnessFile)
+    const res = (level: string, ruleId: string) => ({ ruleId, level, locations: [{ physicalLocation: { artifactLocation: { uri: `file://${join(repo.root, 'src/a.ts')}` }, region: { startLine: 1 } } }] })
+    repo.write('report.json', JSON.stringify({ runs: [{ results: [res('note', 'lint/suspicious/noConsole'), res('note', 'lint/style/useConst'), res('error', 'lint/x/y')] }] }))
+    const r = value(readPart(repo.root, fakeCtx(repo.root, { env: fixtureEnv() }), 'biome', 'cat report.json; exit 1'))
+    expect(r.diagnostics.map((d) => d.rule)).toEqual(['lint/x/y'])
+    expect(r.tolerated.map((d) => d.rule)).toEqual(['lint/suspicious/noConsole'])
+    expect(r.reported).toBe(1)
+  })
+
+  it("lineKeys counts a file's lines by their key, and a missing file is empty (row 283)", () => {
+    const repo = tmpRepo()
+    repo.write('a.ts', '  } catch {\n} catch {\nx\n')
+    git(repo.root, 'add', '-A')
+    git(repo.root, 'commit', '-qm', 'a')
+    const commit = git(repo.root, 'rev-parse', 'HEAD')
+    const key = diagnosticKey({ tool: 'eslint', rule: 'no-x', file: 'a.ts', snippet: '} catch {' })
+    expect(lineKeys(repo.root, commit, 'a.ts', 'eslint', 'no-x')!.get(key)).toBe(2)
+    expect(lineKeys(repo.root, commit, 'nope.ts', 'eslint', 'no-x')!.size).toBe(0)
+    expect(lineKeys(repo.root, 'b'.repeat(40), 'a.ts', 'eslint', 'no-x')).toBeUndefined()
   })
 })

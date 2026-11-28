@@ -27,9 +27,10 @@ import { switchOffNotes, switchOffsCheck } from '../switch-offs.js'
 import { restorable } from '../definitions.js'
 import { definitionsCheck, type LintEffect } from '../lint-effect.js'
 import { lintCheck } from '../lint-lane.js'
-import { logSafe, offeredLine } from '../toon.js'
+import { kv, logSafe, offeredLine } from '../toon.js'
 import { cliAct } from '../act.js'
 import { guardsCheck } from '../guard.js'
+import { prepareTolerated, toleratedCheck } from '../tolerated.js'
 
 export function codePromptBody(wt: string, base: string, files: string[], header: string): string {
   // Row 246: the diff text is the plan change set's — witness's payload files never reach a reviewer.
@@ -116,6 +117,9 @@ registerGate({
     const baseR = diffBase(wt, cfg)
     if (!baseR.ok) return baseR
     const base = baseR.value
+    // Row 285 (C51). The tolerated lists written for this tree before the change set or any check reads it.
+    const tolerated = await prepareTolerated(root, wt, ctx, cfg, planId, base)
+    if (tolerated !== undefined && tolerated.wrote.length > 0) ctx.out(kv('tolerated', `${tolerated.wrote.join(' · ')} rewritten for this tree`))
     const files = planChangeSet(wt, base)
 
     const pin = plan.meta['design-from']
@@ -163,6 +167,8 @@ registerGate({
       // Row 265. A conflict opener on a line the plan adds withholds the review, and so does a lint part
       // that does not pass — the same lane ship runs (row 261), its missing base keys owed alike.
       { name: 'markers', run: () => markersCheck(wt, base, files) },
+      // Row 284: wherever a tolerated set applies, its rules' new spots — the human's to book.
+      ...(tolerated === undefined ? [] : [{ name: 'tolerated', run: () => toleratedCheck(root, wt, cfg, planId, base, 'implement', tolerated) }]),
       { name: 'lint', run: () => lintCheck(root, wt, ctx, cfg, base, planId) },
       ...(restored.ok && restored.value.length === 0 ? [] : [{ name: 'definitions', run: () => {
         const r = definitionsCheck(root, wt, cfg, base, planId, files, restored)

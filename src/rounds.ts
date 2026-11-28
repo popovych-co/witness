@@ -38,6 +38,30 @@ export interface GateCheck {
   // Row 281. The guards check's verdict per marked anchor (src/guard.ts); present when non-empty. Each
   // owed or stale anchor joins the resume signature, so a proof or a waiver since a round moves it.
   guards?: GuardVerdict[]
+  // Row 284. The tolerated check's verdict per tolerated (tool, rule) (src/tolerated.ts); present on that
+  // check alone. Each grown key, `over` count and unmeasured rule joins the resume signature.
+  tolerated?: ToleratedVerdict[]
+}
+
+// Row 284 (§4 T4). One spot of a tolerated rule: its file, how many copies of its key, and (final review C1) on
+// how many lines they sat where read — two spots of one rule on one line share a key, so a cap counted in
+// lines is scaled by copies per line. Absent: one copy per line.
+export interface ToleratedSpot { file: string; copies: number; lines?: number }
+
+// Row 284. One tolerated (tool, rule) as the tolerated check reads it: measured — `spots` the plan's tree
+// holds, `allowed` how many of them the allowance covers, `grown` the copies beyond it per key (at most
+// MAX_TOLERATED_KEYS keys, `over` the rest counted), `lines` each grown key's first line on the plan's
+// tree — or not measured / untrusted, `why` a refusal rule id (never a path or a command).
+export interface ToleratedVerdict {
+  tool: ReaderTool
+  rule: string
+  state: 'measured' | 'not-measured' | 'untrusted'
+  why?: string
+  spots?: number
+  allowed?: number
+  grown?: Record<string, ToleratedSpot>
+  over?: number
+  lines?: Record<string, number>
 }
 
 // Row 281 (§4 T4). One marked anchor as the guards check reads it: `mark` the reviewer's ask; `state`

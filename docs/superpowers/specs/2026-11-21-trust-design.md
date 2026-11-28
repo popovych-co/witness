@@ -309,6 +309,17 @@ round, a hidden item closes when no key it books is held by its file in the roun
 is gone), a part item when the tree holds the base's definitions again; another merged plan's only where the round's
 base still held them and the tree does not.
 
+**As built (T4b, row 284; the map's C46, C50).** The fifth kind, `tolerated-set`, holds per (tool, rule) the spots of
+a rule a lint guard's proof found old (origin `guard`, with its anchor) or growth a human booked (origin `book`): each
+diagnostic key with its file and copies, 1–500 keys; its key is 16 hex over (kind, check, plan, tool, rule, the sorted
+spots), the other formulas unchanged. A set applies to its own plan, and to every plan once its plan merged. The
+allowance is the ledger, not a base run: per rule and key, the plan's own sets whole plus the merged sets' copies capped
+by the base's spots less the plan's own guard copies — the lines the base holds with the key times the most copies per
+line a set saw (each spot records its lines: two spots of one rule on one line share a key); an own booked copy uses no
+base line. It closes at
+the merge stamp once the merged tree holds none of its lines (another merged plan's only where this merge took the last
+one out), at the abandon with its plan, by a re-proof of its guard (`by: 'guard'`), or by `witness dismiss ledger`.
+
 ### 3.4 Counterfactual runs (CF) — T3
 
 **Where.** One persistent, provisioned scratch worktree per repo, at a short fixed path, under the scratch lock.
@@ -485,6 +496,16 @@ wrote it, but an added ignore file is removed.
 `[A-Za-z0-9._@+/-]`, no empty, `.` or `..` segment, no segment starting with `-`) are the only words witness appends,
 substituted for `{files}`; a test name, an anchor or a rule id never reaches a command.
 
+**As built (T4b, rows 283 and 285; the map's C47–C49, C51).** Readers read through the lists: one run gives errors and
+tolerated spots (ESLint's `file`-kind suppressed messages, Biome's notes at the witness file's pairs), and ESLint's exit
+2 with a whole report is read. The writers are witness code — no command, no setting, no trust: the root
+`eslint-suppressions.json` (ESLint's layout, keys sorted, a final newline, in the repo's JSON style; an emptied list is
+`{}`) and `biome.witness.json`, which `biome.json` extends (one override per file at `info`, never `off`, so Biome stays
+green and still reports every spot; byte-equal by construction, since every gate writes it). A Biome plugin rule,
+clippy and tsc have none. Every code gate rewrites both for its tree before anything reads it; ship commits them, its
+move puts them back to HEAD's before capturing the work and rebases under a scratch merge driver for them; the lint
+effect writes each side's.
+
 ### 3.8 Proof and record models (PM) — record in T1, proof in T6
 
 `proofOf(plan)` and `record(repo)` live in `src/models.ts`, as one computation with many renderers (rows 139/203,
@@ -541,7 +562,8 @@ and rule ids, how many commands trust kept from running, and the held criteria's
 round line, as `model: no reviewer was asked`, and in the round history.
 
 **As built (T4a, row 279; C40).** The scratch lock is held by a live pid, as the test turn is: no wall-clock lease
-(`until` is written for older readers only), and drive's sweep never frees a live holder. A session waiting on a job's
+(`until` is written for older readers only; a `since` more than a week from now either way reads stale), and drive's
+sweep never frees a live holder. A session waiting on a job's
 scratch writes a marker naming its session and is held, as one waiting behind a job for the turn.
 
 ---
@@ -754,7 +776,7 @@ says them (C39).
   round held it refuses `guard-unattributed` — not measured, naming the booking — when the cases pass there or the
   anchored file is unchanged since the round (`attributed: false` when that tree cannot load). A name a run
   never reports is the environment (`guard-not-run`), never a red. Every not-measured refusal is kept per anchor
-  (machine-local) and reaches the guards check and the judge's facts.
+  (machine-local); the guards check passes one to the judge's facts only where it can verify it now.
 - **Lint attribution:** the declared rule at error severity at the anchored file on the round's bytes, none there
   now, and the breadth copy: the anchored file beside itself under a stem drawn each run, every local binding and
   declared method name renamed to drawn names, indentation doubled; JS/TS only, any other file refuses
@@ -762,6 +784,19 @@ says them (C39).
 - **The `guards` check** (judged, after `drift-lane`) reads proven, waived, stale (an overlay file changed since its
   proof) or owed per marked anchor, in that order. **The waiver** is a decision, `book: { check: 'guards', items: [], findings }`,
   with no ledger item (C41).
+
+**As built (T4b, rows 283–287; the map's C46–C52).** The writers, tolerated sets and the lists:
+- **Tolerated sets** are the ledger's fifth kind (§3.3); a lint guard's proof opens the plan's set for the rule's old
+  spots a list can name, less what merged sets allow, in its own transaction, replacing an earlier one; past 500 keys
+  none opens; a rule with no list says so.
+- **The guard reads the base** (C52): a third tree, the base with the overlay; red and green count the anchored file's
+  spots beyond the base's; spots in an overlay file the plan changed are never old.
+- **Growth is its own check** (C46), `tolerated`: withholding, the human's waiver, after `markers`, only where a set
+  applies; red on any new spot of a tolerated rule and on any rule not measured. The acceptance "a swap of one old
+  spot for one new one is caught" is tests/tolerated-gate.test.ts's first case: ESLint exits 0, the check reads red.
+- **The lists** (C48, C49, C51) are witness's, written by every code gate for its tree; ship commits them and its move
+  never stops on them; the lint effect writes each side's.
+- **The record** counts the tolerated spots main still holds per (tool, rule).
 
 ### T5 — Test strength (decision 4)
 
@@ -929,7 +964,7 @@ decision item names its act on a `book:` row (`witness decide <gate> <plan> --bo
 | Train | Settings |
 |---|---|
 | A (T0–T2) | ship.lint named parts; readers.{biome,eslint,clippy,tsc}; scratch.prepare (as built, T2b–T2c: all schema 3; the map's C5) |
-| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool; by-name test template (optional; as built, T4a: `criteria.byFile`, a command holding `{files}`, schema 4, `none` the full suite — C42); mutation list; proof.screens; check-definition paths (as built, T3c: `checks.definitions`, schema 4, the default list in memory for an older file) |
+| B (T3–T6) | switch-off extra patterns (as built, T3a: `checks.switchOffs`, schema 4 — Train B's one step); reader/writer commands per tool (as built, T4b: the readers only — the writers are witness code with no setting, C49); by-name test template (optional; as built, T4a: `criteria.byFile`, a command holding `{files}`, schema 4, `none` the full suite — C42); mutation list; proof.screens; check-definition paths (as built, T3c: `checks.definitions`, schema 4, the default list in memory for an older file) |
 | C (T7–T8) | gates.map.{model,reviewers}; explore.{when, host, login, resources, model, budgetMs} |
 
 **migrate** detects and proposes values:
@@ -1220,3 +1255,27 @@ Drive's report shows machine time per kind. Jobs that no gate reads yield the tu
 - **C45 (T4a, row 280).** The breadth probe covers the JS/TS family only (a Rust copy compiles only when a parent
   module declares it); fresh names rather than a suffix, then drawn each run with the copy's stem, and every local
   binding renamed (slice 2 review I1–I2).
+- **C46 (T4b, row 284).** "New spots in a tolerated set are a T3 switch-off" became their own check, `tolerated`:
+  withholding, the human's waiver, after `markers`, only where a set applies. §3.2 bars the AI judge from booking
+  tolerated growth, while `switch-offs`' waiver is the judge's and the arbiter's menu filters bookings by it; a new spot
+  a list hides from its tool is a lint-class red.
+- **C47 (T4b, row 283).** Readers read through the lists: ESLint's `file`-kind `suppressedMessages` and Biome's notes at
+  the witness file's pairs are `PartReading.tolerated` beside the errors; ESLint's exit 2 with a whole report is read;
+  existing callers read errors alone.
+- **C48 (T4b, row 285).** Biome's "per-(file, rule) overrides" set `info`, never `off`: `off` hides every spot from
+  everyone, new ones too; `info` keeps the tool green even under `--error-on-warnings` and reports each spot as a note.
+- **C49 (T4b, row 285).** "Reader/writer commands per tool" and §3.7's writers column became witness code: the root
+  `eslint-suppressions.json` (ESLint's layout and a final newline, which the consumer's Biome wants) and
+  `biome.witness.json` (`formatJson`); no setting, no trust, schema 4 untouched; plugin rules, clippy and tsc have none.
+- **C50 (T4b, row 284).** "Writers generate them on the base" became the ledger as the allowance: own sets whole,
+  merged sets capped by the lines the plan's base holds; booked growth is a set (`origin: 'book'`); sets close at the
+  merge stamp by line keys. No job, so chat mode reads it exactly; a base run per base commit would leave chat mode not
+  measured. Invariant: every tolerated-rule spot on main passed a gate that allowed or booked it.
+- **C51 (T4b, row 285).** "Ship's rebase regenerates witness-generated tolerated files" became: every code gate
+  rewrites the lists before anything reads the tree (implement uncommitted, ship committed with the trailer); a list
+  tolerates every spot of a tolerated rule; the repo's own entries are kept at most at the base's count; ship's move
+  puts the lists back to HEAD's and rebases under a merge driver for them; the lint effect writes each side's. A stale
+  list makes ESLint exit 2 mid-implement, and the effect side held the base's config with the plan's list.
+- **C52 (T4b, row 286).** T4a's red read any spot of the rule in the anchored file; the guard now reads a third tree
+  (base + overlay), red and green counting the anchored file's spots beyond the base's, and the old tree's spots open
+  the plan's set. A rule firing only on a line the base already held proved red without catching the flagged code.
